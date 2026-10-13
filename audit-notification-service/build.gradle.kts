@@ -1,0 +1,12 @@
+plugins {
+    id("org.springframework.boot")
+}
+
+dependencies {
+    implementation(project(":common-contracts"))
+    implementation("org.springframework.boot:spring-boot-starter-webflux")
+    implementation("org.springframework.boot:spring-boot-starter-kafka")
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
+    runtimeOnly("io.micrometer:micrometer-registry-prometheus")
+    testImplementation("org.springframework.boot:spring-boot-starter-kafka-test")
+}
