@@ -5,6 +5,14 @@ spring:
   application:
     name: external-mock-service
 
+mock:
+  simulation:
+    pkb-delay-ms: 300
+    gcvp-delay-ms: 600
+    ais-oip-delay-ms: 150
+    timeout-delay-ms: 3000
+    gcvp-failure-rate: 0.05
+
 management:
   endpoints:
     web:
