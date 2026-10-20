@@ -4,6 +4,11 @@ server:
 spring:
   application:
     name: credit-gateway-service
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
 
 management:
   endpoints:
