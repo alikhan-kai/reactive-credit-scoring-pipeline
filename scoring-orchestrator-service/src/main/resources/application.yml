@@ -5,6 +5,10 @@ spring:
   application:
     name: scoring-orchestrator-service
 
+services:
+  external-mock:
+    url: http://localhost:8083
+
 management:
   endpoints:
     web:
