@@ -31,6 +31,9 @@ subprojects {
         "testImplementation"("org.springframework.boot:spring-boot-starter-test")
         "testImplementation"("io.projectreactor:reactor-test")
         "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+
+        implementation("io.micrometer:micrometer-tracing-bridge-brave")
+        implementation("io.zipkin.reporter2:zipkin-reporter-brave")
     }
 
     tasks.withType<JavaCompile> {
