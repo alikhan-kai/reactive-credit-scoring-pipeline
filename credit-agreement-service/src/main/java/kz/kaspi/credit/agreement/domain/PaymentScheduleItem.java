@@ -6,6 +6,8 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Transient;
+import org.springframework.data.domain.Persistable;
 import org.springframework.data.relational.core.mapping.Table;
 
 import lombok.AllArgsConstructor;
@@ -18,7 +20,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @Table("payment_schedule_items")
-public class PaymentScheduleItem {
+public class PaymentScheduleItem implements Persistable<UUID> {
 
     @Id
     private UUID id;
@@ -30,4 +32,13 @@ public class PaymentScheduleItem {
     private BigDecimal interestPayment;
     private BigDecimal remainingDebt;
     private Instant createdAt;
+
+    @Transient
+    @Builder.Default
+    private boolean isNewRecord = true;
+
+    @Override
+    public boolean isNew() {
+        return isNewRecord;
+    }
 }
