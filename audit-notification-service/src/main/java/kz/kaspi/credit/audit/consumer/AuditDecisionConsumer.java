@@ -6,6 +6,7 @@ import kz.kaspi.credit.contracts.event.CreditRejectedEvent;
 import kz.kaspi.credit.contracts.event.KafkaTopics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +18,8 @@ public class AuditDecisionConsumer {
     private final AuditService auditService;
 
     @KafkaListener(topics = KafkaTopics.CREDIT_DECISIONS_TOPIC, groupId = "audit-notification-group", containerFactory = "auditKafkaListenerContainerFactory")
-    public void handleDecision(Object event) {
+    public void handleDecision(ConsumerRecord<String, Object> record) {
+        Object event = record.value();
         if (event instanceof CreditApprovedEvent approved) {
             auditService.processApproval(approved);
         } else if (event instanceof CreditRejectedEvent rejected) {
