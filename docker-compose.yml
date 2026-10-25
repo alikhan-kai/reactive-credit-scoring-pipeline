@@ -1,7 +1,11 @@
 version: '3.8'
 
 services:
-  # 1. Реляционная СУБД для договоров и графиков платежей (R2DBC)
+  # ==========================================
+  # ИНФРАСТРУКТУРА (БАЗЫ ДАННЫХ И БРОКЕРЫ)
+  # ==========================================
+
+  # 1. PostgreSQL для договоров и графиков платежей (R2DBC)
   postgres:
     image: postgres:16-alpine
     container_name: kaspi-postgres
@@ -22,7 +26,7 @@ services:
     networks:
       - credit-network
 
-  # 2. In-Memory хранилище: идемпотентность (дедупликация), кэш скоринга, Token Bucket
+  # 2. In-Memory хранилище: идемпотентность (SETNX) и сессионный кэш
   redis:
     image: redis:7-alpine
     container_name: kaspi-redis
@@ -39,7 +43,7 @@ services:
     networks:
       - credit-network
 
-  # 3. Apache Kafka (KRaft режим без тяжелого Zookeeper)
+  # 3. Apache Kafka (KRaft режим)
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     container_name: kaspi-kafka
@@ -66,7 +70,7 @@ services:
     networks:
       - credit-network
 
-  # 4. Веб-интерфейс для просмотра очередей и сообщений Kafka
+  # 4. Веб-интерфейс Kafka UI
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kaspi-kafka-ui
@@ -80,7 +84,7 @@ services:
     networks:
       - credit-network
 
-  # 5. Сервер распределенной трассировки (Zipkin)
+  # 5. Сервер распределенной трассировки Zipkin
   zipkin:
     image: openzipkin/zipkin:latest
     container_name: kaspi-zipkin
@@ -89,7 +93,7 @@ services:
     networks:
       - credit-network
 
-  # 6. Сбор метрик со Spring Boot Actuator (Prometheus)
+  # 6. Prometheus
   prometheus:
     image: prom/prometheus:latest
     container_name: kaspi-prometheus
@@ -100,7 +104,7 @@ services:
     networks:
       - credit-network
 
-  # 7. Дашборды мониторинга (Grafana)
+  # 7. Grafana
   grafana:
     image: grafana/grafana:latest
     container_name: kaspi-grafana
@@ -113,6 +117,100 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+    networks:
+      - credit-network
+
+  # ==========================================
+  # МИКРОСЕРВИСЫ ПЛАТФОРМЫ
+  # ==========================================
+
+  # 8. Эмулятор внешних систем (ПКБ, ГЦВП, АИС ОИП)
+  external-mock-service:
+    build:
+      context: .
+      dockerfile: external-mock-service/Dockerfile
+      args:
+        JAR_FILE: external-mock-service/build/libs/external-mock-service-0.0.1-SNAPSHOT.jar
+    container_name: kaspi-external-mock
+    ports:
+      - "8083:8083"
+    networks:
+      - credit-network
+
+  # 9. Реактивный оркестратор скоринга (DAG, Scatter-Gather)
+  scoring-orchestrator-service:
+    build:
+      context: .
+      dockerfile: scoring-orchestrator-service/Dockerfile
+      args:
+        JAR_FILE: scoring-orchestrator-service/build/libs/scoring-orchestrator-service-0.0.1-SNAPSHOT.jar
+    container_name: kaspi-scoring-orchestrator
+    ports:
+      - "8082:8082"
+    environment:
+      SERVICES_EXTERNAL_MOCK_URL: http://external-mock-service:8083
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - kafka
+      - external-mock-service
+    networks:
+      - credit-network
+
+  # 10. Входной шлюз приема заявок (Idempotency, Netty)
+  credit-gateway-service:
+    build:
+      context: .
+      dockerfile: credit-gateway-service/Dockerfile
+      args:
+        JAR_FILE: credit-gateway-service/build/libs/credit-gateway-service-0.0.1-SNAPSHOT.jar
+    container_name: kaspi-credit-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SERVICES_SCORING_ORCHESTRATOR_URL: http://scoring-orchestrator-service:8082
+    depends_on:
+      - redis
+      - scoring-orchestrator-service
+    networks:
+      - credit-network
+
+  # 11. Договорной сервис (R2DBC PostgreSQL, Kafka Consumer)
+  credit-agreement-service:
+    build:
+      context: .
+      dockerfile: credit-agreement-service/Dockerfile
+      args:
+        JAR_FILE: credit-agreement-service/build/libs/credit-agreement-service-0.0.1-SNAPSHOT.jar
+    container_name: kaspi-credit-agreement
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/credit_db
+      SPRING_R2DBC_USERNAME: kaspi_admin
+      SPRING_R2DBC_PASSWORD: kaspi_secret_password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - credit-network
+
+  # 12. Сервис регуляторного аудита и нотификаций
+  audit-notification-service:
+    build:
+      context: .
+      dockerfile: audit-notification-service/Dockerfile
+      args:
+        JAR_FILE: audit-notification-service/build/libs/audit-notification-service-0.0.1-SNAPSHOT.jar
+    container_name: kaspi-audit-notification
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - kafka
     networks:
       - credit-network
 
