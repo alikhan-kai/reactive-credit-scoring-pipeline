@@ -12,4 +12,6 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-webflux-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis-reactive-test")
     testImplementation("org.springframework.boot:spring-boot-starter-kafka-test")
+    implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
+    runtimeOnly("org.postgresql:r2dbc-postgresql")
 }

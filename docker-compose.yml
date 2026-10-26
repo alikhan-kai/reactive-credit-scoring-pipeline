@@ -150,8 +150,13 @@ services:
     environment:
       SERVICES_EXTERNAL_MOCK_URL: http://external-mock-service:8083
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/credit_db
+      SPRING_R2DBC_USERNAME: kaspi_admin
+      SPRING_R2DBC_PASSWORD: kaspi_secret_password
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
     depends_on:
       - kafka
+      - postgres
       - external-mock-service
     networks:
       - credit-network

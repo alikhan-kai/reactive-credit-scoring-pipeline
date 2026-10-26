@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: scoring-orchestrator-service
+  r2dbc:
+    url:${SPRING_R2DBC_URL:r2dbc:postgresql://localhost:5432/credit_db}
+    username: ${SPRING_R2DBC_USERNAME:kaspi_admin}
+    password: ${SPRING_R2DBC_PASSWORD:kaspi_secret_password}
 
 services:
   external-mock:
