@@ -31,3 +31,18 @@ CREATE INDEX IF NOT EXISTS idx_agreements_iin ON credit_agreements(iin);
 CREATE INDEX IF NOT EXISTS idx_agreements_app_id ON credit_agreements(application_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_agreement_id ON payment_schedule_items(agreement_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_agreement_num ON payment_schedule_items(agreement_id, payment_number);
+
+-- Таблица для паттерна Transactional Outbox (гарантированная доставка событий)
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id VARCHAR(64) NOT NULL,
+    topic VARCHAR(128) NOT NULL,
+    payload JSONB NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    retry_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON outbox_events(status, created_at);
