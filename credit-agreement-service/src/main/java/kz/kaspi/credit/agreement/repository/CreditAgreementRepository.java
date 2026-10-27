@@ -7,8 +7,10 @@ import org.springframework.stereotype.Repository;
 
 import kz.kaspi.credit.agreement.domain.CreditAgreement;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 @Repository
 public interface CreditAgreementRepository extends R2dbcRepository<CreditAgreement, UUID> {
-    Flux<CreditAgreement> findAllByIin(String iin);
+    // Flux<CreditAgreement> findAllByIin(String iin);
+    Mono<CreditAgreement> findByApplicationId(UUID applicationId);
 }
