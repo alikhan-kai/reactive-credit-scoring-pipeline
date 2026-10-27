@@ -8,10 +8,6 @@ public final class KafkaTopics {
 
     /** Топик принятых скоринговых решений (одобрено / отклонено) */
     public static final String CREDIT_DECISIONS_TOPIC = "credit.decisions";
-
-    /** Топик сформированных графиков платежей */
-    public static final String PAYMENT_SCHEDULES_TOPIC = "payment.schedules";
-
-    /** Dead Letter Topic (DLT) для сбойных и невалидных сообщений */
-    public static final String CREDIT_DECISIONS_DLT_TOPIC = "credit.decisions.dlt";
+    public static final String CREDIT_DECISIONS_DLQ_TOPIC = "credit.decisions.DLQ";
+    public static final String CREDIT_COMPENSATIONS_TOPIC = "credit.compensations";
 }
