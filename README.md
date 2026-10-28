@@ -11,6 +11,7 @@
 - [Технологический стек](#технологический-стек)
 - [Микросервисы системы](#микросервисы-системы)
 - [Бизнес-логика скоринга](#бизнес-логика-скоринга)
+- [Распределенная надежность и отказоустойчивость](#распределенная-надежность-и-отказоустойчивость)
 - [Результаты нагрузочного тестирования (Kaspi Жұма Stress-Test)](#результаты-нагрузочного-тестирования-kaspi-жұма-stress-test)
 - [Дашборды и скриншоты мониторинга](#дашборды-и-скриншоты-мониторинга)
 - [Примеры боевых запросов и ответов API](#примеры-боевых-запросов-и-ответов-api)
@@ -94,6 +95,99 @@ flowchart TD
    * Если запрашиваемая сумма превышает лимит по КДН, система не отказывает надежному клиенту, а автоматически вычисляет максимально допустимую сумму кредита:
      $$\text{Max Monthly Payment} = (\text{Income} \times 0.50) - \text{Existing Obligations}$$
    * Формируется предложение со статусом `COUNTER_OFFER` с скорректированной суммой и комфортным платежом.
+
+---
+
+## Распределенная надежность и отказоустойчивость
+
+Платформа спроектирована для работы в условиях высоких нагрузок и частичной недоступности инфраструктуры с соблюдением требований финансовой консистентности.
+
+### 1. Гарантированная доставка решений (Transactional Outbox)
+
+Для исключения проблемы «двойной записи» (dual-write problem) между базой данных и брокером сообщений используется паттерн **Transactional Outbox**. Принятое скоринговое решение атомарно сохраняется в таблицу `outbox_events` сервиса `scoring-orchestrator-service` в статусе `PENDING`.
+
+Фоновый реактивный публикатор (`OutboxPublisher`) непрерывно опрашивает события батчами, отправляет их в топик `credit.decisions` с подтверждением брокера (`acks=all`) и переводит запись в статус `SENT`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Engine as Decision Engine
+    participant DB as PostgreSQL (outbox_events)
+    participant Outbox as Outbox Publisher
+    participant Kafka as Kafka (credit.decisions)
+
+    Engine->>DB: Сохранение решения (status: PENDING)
+    loop Каждые 200 ms (Flux.interval)
+        Outbox->>DB: Чтение батча событий PENDING
+        Outbox->>Kafka: Публикация CreditApprovedEvent (acks=all)
+        Kafka-->>Outbox: RecordMetadata (offset, partition)
+        Outbox->>DB: Обновление статуса (status: SENT, processed_at)
+    end
+```
+
+**Срез событий в PostgreSQL:**
+```sql
+SELECT id, aggregate_type, event_type, status, created_at, processed_at FROM outbox_events ORDER BY created_at DESC LIMIT 1;
+```
+```text
+                  id                  | aggregate_type |       event_type        | status |         created_at          |        processed_at
+--------------------------------------+----------------+-------------------------+--------+-----------------------------+-----------------------------
+ d0d89684-d222-4fd9-8d15-6734fc80cccd | CREDIT_DECISION| CreditApprovedEvent     | SENT   | 2026-10-28 04:38:03.208173  | 2026-10-28 04:38:03.489112
+```
+
+---
+
+### 2. Неблокирующий повтор и Dead Letter Topic (DLT)
+
+При обработке событий в `credit-agreement-service` настроена стратегия non-blocking retry с изолированной очередью недоставленных сообщений:
+
+* **Изоляция сбоев:** При возникновении временных инфраструктурных сбоев (таймауты БД, сетевые разрывы) консьюмер выполняет 3 повторные попытки с экспоненциальной задержкой (`ExponentialBackOff`: начальная задержка 1000 мс, множитель 2.0).
+* **Dead Letter Topic:** Сообщения, не поддающиеся обработке после исчерпания попыток, автоматически направляются восстановителем `DeadLetterPublishingRecoverer` в топик `credit.decisions.DLT` с сохранением оригинальных заголовков ошибки (`X-Exception-Message`, `X-Exception-Stacktrace`).
+* **Безопасная десериализация:** Использование `ErrorHandlingDeserializer` предотвращает остановку слушателя при поступлении некорректных payload (poison pills).
+
+```mermaid
+flowchart LR
+    KafkaIn["Kafka: credit.decisions"] --> Consumer["Agreement Consumer"]
+    Consumer -->|Ошибка обработки| Retry{"Retry (3 попытки, exp backoff)"}
+    Retry -->|Успех| DB[("PostgreSQL: credit_agreements")]
+    Retry -->|Лимит исчерпан| DLT["Kafka: credit.decisions.DLT"]
+    DLT --> Alert["Мониторинг / Ручной разбор инцидента"]
+```
+
+---
+
+### 3. Компенсирующие транзакции (Saga Pattern)
+
+Для обеспечения согласованности между распределенными сервисами реализована распределенная хореография Saga. В случае обнаружения критических стоп-факторов на пост-скоринговых этапах (антифрод-мониторинг, подозрительная смена устройства, блокировка платежного шлюза) в топик `credit.compensations` отправляется событие `CreditCompensationEvent`.
+
+Сервис оформления договоров `credit-agreement-service` перехватывает событие компенсации и выполняет компенсирующее действие: договор переводится из статуса `ACTIVE` в финальный статус `COMPENSATED_CANCELLED` с фиксацией причины отмены.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Downstream as Downstream (Anti-Fraud / Payment)
+    participant Kafka as Kafka (credit.compensations)
+    participant Agreement as credit-agreement-service
+    participant DB as PostgreSQL (credit_agreements)
+
+    Downstream->>Kafka: Публикация CreditCompensationEvent (SUSPECTED_FRAUD)
+    Kafka->>Agreement: Получение события компенсации
+    Agreement->>DB: Поиск договора по applicationId
+    Agreement->>DB: UPDATE status = 'COMPENSATED_CANCELLED', updated_at = NOW()
+    Agreement-->>Agreement: Логирование отмены договора и аудит
+```
+
+**Результат выполнения компенсирующей транзакции в базе данных:**
+```sql
+SELECT id, application_id, approved_amount, status, updated_at 
+FROM credit_agreements 
+WHERE application_id = '60147e2b-acfa-451e-9ed5-455016beb194';
+```
+```text
+                  id                  |            application_id            | approved_amount |        status         |          updated_at
+--------------------------------------+--------------------------------------+-----------------+-----------------------+-------------------------------
+ 2cbd8fbd-9f6d-4e87-8f18-39003bf681ee | 60147e2b-acfa-451e-9ed5-455016beb194 |       500000.00 | COMPENSATED_CANCELLED | 2026-10-28 04:48:04.851834+00
+```
 
 ---
 
