@@ -24,16 +24,16 @@ public class OutboxPublisher {
 
     @EventListener(ApplicationReadyEvent.class)
     public void startOutboxProcessing() {
-        log.info("Запуск фонового реактивного Outbox Publisher (интервал 100ms)...");
+        log.info("Запуск фонового реактивного Outbox Publisher (интервал 200ms)...");
 
-        Flux.interval(Duration.ofMillis(100))
-                .flatMap(tick -> processPendingEvents(), 1)
-                .onErrorContinue((err, obj) -> log.error("Ошибка в цикле Outbox Publisher: {}", err.getMessage()))
+        Flux.interval(Duration.ofMillis(200))
+                .flatMap(tick -> processPendingEvents())
+                .onErrorContinue((err, obj) -> log.error("Ошибка в цикле Outbox: {}", err.getMessage()))
                 .subscribe();
     }
 
     private Flux<OutboxEvent> processPendingEvents() {
-        return outboxEventRepository.findPendingEvents(50)
+        return outboxEventRepository.findTop50ByStatusOrderByCreatedAtAsc("PENDING")
                 .flatMap(this::publishToKafka);
     }
 
@@ -47,12 +47,6 @@ public class OutboxPublisher {
                 })
                 .doOnSuccess(saved -> log.info("Событие Outbox {} успешно опубликовано в Kafka [топик {}]",
                         saved.getId(), saved.getTopic()))
-                .doOnError(e -> {
-                    log.error("Сбой публикации события Outbox {}: {}. Попытка будет повторена.",
-                            event.getId(), e.getMessage());
-                    event.setRetryCount(event.getRetryCount() + 1);
-                    event.setNewRecord(false);
-                    outboxEventRepository.save(event).subscribe();
-                });
+                .doOnError(e -> log.error("Сбой публикации события Outbox {}: {}", event.getId(), e.getMessage()));
     }
 }

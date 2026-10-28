@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     aggregate_type VARCHAR(64) NOT NULL,
     aggregate_id VARCHAR(64) NOT NULL,
     topic VARCHAR(128) NOT NULL,
-    payload JSONB NOT NULL,
+    payload TEXT NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
     retry_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
