@@ -10,6 +10,11 @@ spring:
       port: 6379
       timeout: 2000ms
 
+security:
+  rate-limit:
+    max-requests-per-window: 30
+    window-seconds: 60
+
 management:
   endpoints:
     web:
