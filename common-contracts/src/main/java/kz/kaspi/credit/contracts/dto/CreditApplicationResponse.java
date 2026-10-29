@@ -1,6 +1,7 @@
 package kz.kaspi.credit.contracts.dto;
 
 import kz.kaspi.credit.contracts.enums.ApplicationStatus;
+import kz.kaspi.credit.contracts.enums.BorrowerRiskTier;
 import kz.kaspi.credit.contracts.enums.CreditProductType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -28,6 +29,7 @@ public class CreditApplicationResponse {
     private BigDecimal interestRate;
     private BigDecimal calculatedDti; // КДН (Коэффициент долговой нагрузки)
     private Integer creditScore;
+    private BorrowerRiskTier borrowerTier; // Сегмент заемщика по скорингу
     private String rejectionReason;
     private Instant decisionTimestamp;
 }

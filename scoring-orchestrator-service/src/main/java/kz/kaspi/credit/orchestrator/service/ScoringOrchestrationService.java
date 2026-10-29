@@ -4,6 +4,7 @@ import kz.kaspi.credit.contracts.constants.ScoringConstants;
 import kz.kaspi.credit.contracts.dto.CreditApplicationRequest;
 import kz.kaspi.credit.contracts.dto.CreditApplicationResponse;
 import kz.kaspi.credit.contracts.enums.ApplicationStatus;
+import kz.kaspi.credit.contracts.enums.BorrowerRiskTier;
 import kz.kaspi.credit.contracts.enums.CreditProductType;
 import kz.kaspi.credit.contracts.external.AisOipDebtorDto;
 import kz.kaspi.credit.contracts.external.GcvpDeductionsDto;
@@ -54,32 +55,54 @@ public class ScoringOrchestrationService {
             GcvpDeductionsDto gcvp,
             AisOipDebtorDto aisOip
     ) {
-        // 1. Проверка СТОП-ФАКТОРА: Аресты счетов судебными исполнителями (Минюст / АИС ОИП)
+        // 1. Определение риск-сегмента заемщика (Risk Tier)
+        BorrowerRiskTier riskTier = BorrowerRiskTier.fromScore(pkb.getCreditScore());
+        log.info("Сегмент заемщика по заявке {}: скоринг ПКБ {}, риск-грейд {}",
+                applicationId, pkb.getCreditScore(), riskTier);
+
+        // 2. Проверка СТОП-ФАКТОРА: Аресты счетов судебными исполнителями (Минюст / АИС ОИП)
         if (aisOip.isHasActiveAccountArrest()) {
             log.warn("Отказ по заявке {}: наличие арестов счетов в АИС ОИП", applicationId);
-            return reject(applicationId, request, "Наличие действующих арестов банковских счетов");
+            return reject(applicationId, request, riskTier, "Наличие действующих арестов банковских счетов");
         }
 
-        // 2. Проверка СТОП-ФАКТОРА: Злостный дефолт в ПКБ (DPD 90+ или FPD)
+        // 3. Проверка СТОП-ФАКТОРА: Злостный дефолт в ПКБ (DPD 90+ или FPD)
         if (pkb.isFirstPaymentDefault() || pkb.getMaxDpdLast12Months() >= 90) {
             log.warn("Отказ по заявке {}: критические просрочки в ПКБ (DPD={}, FPD={})",
                     applicationId, pkb.getMaxDpdLast12Months(), pkb.isFirstPaymentDefault());
-            return reject(applicationId, request, "Негативная кредитная история: просрочки свыше 90 дней");
+            return reject(applicationId, request, riskTier, "Негативная кредитная история: просрочки свыше 90 дней");
         }
 
-        // 3. Расчет процентной ставки в зависимости от продукта
+        // 4. Проверка СТОП-ФАКТОРА: Критический скоринговый балл (HIGH_RISK)
+        if (riskTier == BorrowerRiskTier.HIGH_RISK) {
+            log.warn("Отказ по заявке {}: критически низкий скоринговый балл ({} < 500)",
+                    applicationId, pkb.getCreditScore());
+            return reject(applicationId, request, riskTier, "Критически низкий кредитный рейтинг ПКБ (ниже 500)");
+        }
+
+        // 5. Проверка динамического кредитного лимита сегмента
+        BigDecimal effectiveRequestedAmount = request.getRequestedAmount();
+        boolean limitExceededByTier = false;
+        if (effectiveRequestedAmount.compareTo(riskTier.getMaxCreditLimit()) > 0) {
+            log.info("Запрашиваемая сумма {} превышает максимальный лимит риск-грейда {} ({})",
+                    effectiveRequestedAmount, riskTier, riskTier.getMaxCreditLimit());
+            effectiveRequestedAmount = riskTier.getMaxCreditLimit();
+            limitExceededByTier = true;
+        }
+
+        // 6. Расчет процентной ставки в зависимости от продукта
         BigDecimal annualRate = (request.getProductType() == CreditProductType.EXPRESS_CREDIT)
                 ? EXPRESS_CREDIT_RATE
                 : ScoringConstants.INSTALLMENT_INTEREST_RATE; // 0% для рассрочки 0-0-12
 
-        // 4. Расчет ежемесячного платежа по запрашиваемой сумме
+        // 7. Расчет ежемесячного платежа по запрашиваемой сумме
         BigDecimal requestedMonthlyPayment = FinancialCalculator.calculateMonthlyPayment(
-                request.getRequestedAmount(),
+                effectiveRequestedAmount,
                 annualRate,
                 request.getTermMonths()
         );
 
-        // 5. Расчет КДН (DTI)
+        // 8. Расчет КДН (DTI)
         BigDecimal monthlyIncome = gcvp.getCalculatedAverageMonthlyIncome();
         BigDecimal dti = FinancialCalculator.calculateDti(
                 pkb.getTotalMonthlyPayment(),
@@ -87,33 +110,35 @@ public class ScoringOrchestrationService {
                 monthlyIncome
         );
 
-        // 6. Проверка порога долговой нагрузки КДН <= 50% (норматив АРРФР)
-        if (dti.compareTo(ScoringConstants.MAX_ALLOWED_DTI) > 0) {
-            // Если КДН превышен, рассчитываем максимальную доступную сумму (Counter-Offer)
+        // 9. Проверка порога долговой нагрузки КДН <= 50% (норматив АРРФР)
+        if (dti.compareTo(ScoringConstants.MAX_ALLOWED_DTI) > 0 || limitExceededByTier) {
             BigDecimal maxAllowedMonthlyPayment = monthlyIncome
                     .multiply(ScoringConstants.MAX_ALLOWED_DTI)
                     .subtract(pkb.getTotalMonthlyPayment());
 
             if (maxAllowedMonthlyPayment.compareTo(BigDecimal.ZERO) <= 0) {
                 log.warn("Отказ по заявке {}: долговая нагрузка КДН превышает 50%, лимит исчерпан", applicationId);
-                return reject(applicationId, request, "Превышение максимального коэффициента долговой нагрузки (КДН > 50%)");
+                return reject(applicationId, request, riskTier, "Превышение максимального коэффициента долговой нагрузки (КДН > 50%)");
             }
 
-            // Предлагаем уменьшенную сумму рассрочки под допустимый платеж
             BigDecimal counterOfferAmount = maxAllowedMonthlyPayment
                     .multiply(BigDecimal.valueOf(request.getTermMonths()))
                     .setScale(0, RoundingMode.DOWN);
 
+            if (counterOfferAmount.compareTo(riskTier.getMaxCreditLimit()) > 0) {
+                counterOfferAmount = riskTier.getMaxCreditLimit();
+            }
+
             if (counterOfferAmount.compareTo(ScoringConstants.MIN_LOAN_AMOUNT) < 0) {
-                return reject(applicationId, request, "Превышение лимита долговой нагрузки (КДН > 50%)");
+                return reject(applicationId, request, riskTier, "Превышение лимита долговой нагрузки (КДН > 50%)");
             }
 
             BigDecimal counterOfferMonthlyPayment = FinancialCalculator.calculateMonthlyPayment(
                     counterOfferAmount, annualRate, request.getTermMonths()
             );
 
-            log.info("Встречное предложение (Counter-Offer) для заявки {}: запрошено {}, предложено {}",
-                    applicationId, request.getRequestedAmount(), counterOfferAmount);
+            log.info("Встречное предложение (Counter-Offer) для заявки {}: запрошено {}, предложено {} (Сегмент: {})",
+                    applicationId, request.getRequestedAmount(), counterOfferAmount, riskTier);
 
             return CreditApplicationResponse.builder()
                     .applicationId(applicationId)
@@ -127,13 +152,14 @@ public class ScoringOrchestrationService {
                     .interestRate(annualRate)
                     .calculatedDti(dti)
                     .creditScore(pkb.getCreditScore())
+                    .borrowerTier(riskTier)
                     .decisionTimestamp(Instant.now())
                     .build();
         }
 
-        // 7. УСПЕШНОЕ ОДОБРЕНИЕ (APPROVED)
-        log.info("Заявка {} успешно одобрена: сумма {}, платеж {}, DTI {}",
-                applicationId, request.getRequestedAmount(), requestedMonthlyPayment, dti);
+        // 10. УСПЕШНОЕ ОДОБРЕНИЕ (APPROVED)
+        log.info("Заявка {} успешно одобрена: сумма {}, платеж {}, DTI {}, сегмент {}",
+                applicationId, request.getRequestedAmount(), requestedMonthlyPayment, dti, riskTier);
 
         return CreditApplicationResponse.builder()
                 .applicationId(applicationId)
@@ -147,11 +173,12 @@ public class ScoringOrchestrationService {
                 .interestRate(annualRate)
                 .calculatedDti(dti)
                 .creditScore(pkb.getCreditScore())
+                .borrowerTier(riskTier)
                 .decisionTimestamp(Instant.now())
                 .build();
     }
 
-    private CreditApplicationResponse reject(UUID applicationId, CreditApplicationRequest request, String reason) {
+    private CreditApplicationResponse reject(UUID applicationId, CreditApplicationRequest request, BorrowerRiskTier riskTier, String reason) {
         return CreditApplicationResponse.builder()
                 .applicationId(applicationId)
                 .iin(request.getIin())
@@ -162,6 +189,8 @@ public class ScoringOrchestrationService {
                 .approvedTermMonths(0)
                 .monthlyPayment(BigDecimal.ZERO)
                 .interestRate(BigDecimal.ZERO)
+                .creditScore(null)
+                .borrowerTier(riskTier)
                 .rejectionReason(reason)
                 .decisionTimestamp(Instant.now())
                 .build();

@@ -41,6 +41,7 @@ public class DecisionEventProducer {
                         .interestRate(response.getInterestRate())
                         .monthlyPayment(response.getMonthlyPayment())
                         .creditScore(response.getCreditScore())
+                        .borrowerTier(response.getBorrowerTier())
                         .dti(response.getCalculatedDti())
                         .approvedAt(Instant.now())
                         .build();
@@ -49,33 +50,30 @@ public class DecisionEventProducer {
                         .applicationId(response.getApplicationId())
                         .iin(response.getIin())
                         .productType(response.getProductType())
-                        .requestedAmount(response.getRequestedAmount())
-                        .rejectionCode("SCORING_REJECTED")
                         .rejectionReason(response.getRejectionReason())
                         .rejectedAt(Instant.now())
                         .build();
             }
 
             try {
-                String json = objectMapper.writeValueAsString(eventPayload);
+                String payloadJson = objectMapper.writeValueAsString(eventPayload);
                 OutboxEvent outboxEvent = OutboxEvent.builder()
                         .id(UUID.randomUUID())
-                        .aggregateType("CreditDecision")
-                        .aggregateId(key)
+                        .aggregateType("CREDIT_DECISION")
+                        .aggregateId(response.getApplicationId().toString())
                         .topic(KafkaTopics.CREDIT_DECISIONS_TOPIC)
-                        .payload(json)
+                        .payload(payloadJson)
                         .status("PENDING")
-                        .retryCount(0)
                         .createdAt(Instant.now())
                         .isNewRecord(true)
                         .build();
 
-                log.info("Сохранение события скоринга в Outbox [заявка {}]", key);
                 return outboxEventRepository.save(outboxEvent)
+                        .doOnSuccess(saved -> log.info("Решение скоринга сохранено в transactional outbox: eventId={}, applicationId={}, status={}",
+                                saved.getId(), key, saved.getStatus()))
                         .thenReturn(response);
-
             } catch (JsonProcessingException e) {
-                log.error("Ошибка сериализации события скоринга для заявки {}: {}", key, e.getMessage());
+                log.error("Ошибка сериализации события в outbox для заявки {}", key, e);
                 return Mono.error(e);
             }
         });

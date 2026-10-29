@@ -1,5 +1,6 @@
 package kz.kaspi.credit.contracts.event;
 
+import kz.kaspi.credit.contracts.enums.BorrowerRiskTier;
 import kz.kaspi.credit.contracts.enums.CreditProductType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -24,6 +25,7 @@ public class CreditApprovedEvent {
     private BigDecimal interestRate;
     private BigDecimal monthlyPayment;
     private Integer creditScore;
+    private BorrowerRiskTier borrowerTier;
     private BigDecimal dti;
     private Instant approvedAt;
 }
