@@ -74,6 +74,30 @@ services:
     networks:
       - credit-network
 
+  # 3.1. Инициализатор топиков Kafka (Topic Provisioning)
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kaspi-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: [ "sh", "-c" ]
+    command: |
+      "
+      echo -e 'Ожидание готовности брокера Kafka...'
+      cub kafka-ready -b kafka:29092 1 30
+
+      echo -e 'Создание топиков платформы скоринга...'
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic credit.decisions --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic credit.decisions.DLT --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic credit.compensations --partitions 3 --replication-factor 1
+
+      echo -e 'Успешно инициализированы топики:'
+      kafka-topics --bootstrap-server kafka:29092 --list
+      "
+    networks:
+      - credit-network
+
   # 4. Веб-интерфейс Kafka UI
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
