@@ -1,0 +1,42 @@
+groups:
+  - name: kaspi-credit-scoring-alerts
+    rules:
+      # 1. Падение любого микросервиса платформы скоринга
+      - alert: ServiceInstanceDown
+        expr: up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Экземпляр сервиса {{ $labels.job }} недоступен"
+          description: "Микросервис {{ $labels.job }} на узле {{ $labels.instance }} не отвечает более 15 секунд."
+
+      # 2. Нарушение банковского SLA скоринга по латентности (p95 > 1.5s)
+      - alert: CreditScoringHighLatency
+        expr: histogram_quantile(0.95, sum by (le, job) (rate(http_server_requests_seconds_bucket{job="scoring-orchestrator-service"}[1m]))) > 1.5
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Превышение SLA времени скоринга p95 (> 1.5s)"
+          description: "Латентность p95 сервиса {{ $labels.job }} составляет {{ $value }}s, что превышает допустимый порог финансового SLA в 1.5 секунды."
+
+      # 3. Высокий уровень ошибок HTTP 5xx (Error Rate > 5%)
+      - alert: HighHttpServerErrorRate
+        expr: sum by (job) (rate(http_server_requests_seconds_count{status=~"5.."}[1m])) / sum by (job) (rate(http_server_requests_seconds_count[1m])) * 100 > 5
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Всплеск 5xx ошибок в сервисе {{ $labels.job }}"
+          description: "Доля внутренних серверных ошибок в {{ $labels.job }} превышает 5% за последнюю минуту."
+
+      # 4. Высокая утилизация JVM памяти (Heap > 85%)
+      - alert: HighJvmHeapUsage
+        expr: jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"} * 100 > 85
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Высокое потребление памяти JVM Heap в {{ $labels.job }}"
+          description: "Заполнение пула кучи JVM в сервисе {{ $labels.job }} превышает 85% (текущее: {{ $value }}%). Риск OutOfMemoryError."
